@@ -39,7 +39,7 @@ const INFO_COMPACT: [string, string][] = [
   ['OUT', 'Shows just the collage without the UI. {TAP} to come back.'],
 ];
 const INFO_GESTURES = ['TAP', 'DRAG', 'PINCH', 'TWIST'];
-const INFO_CREDIT_LINKS = { project: 'https://ravipopat.info/maybe-machines', author: 'https://ravipopat.info' };
+const INFO_CREDIT_LINKS = { project: 'https://maybemachines.com', author: 'https://ravipopat.info' };
 const BUTTON_SIZE = 58;              // px
 const BUTTON_FONT = "'VT323', monospace";
 const BUTTON_FONT_SIZE = 18;         // px
