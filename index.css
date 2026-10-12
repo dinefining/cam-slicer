@@ -1,0 +1,11 @@
+html, body {
+  margin: 0;
+  overflow: hidden;
+  overscroll-behavior: none;
+  /* Keep touch gestures for the canvas: no page zoom, text selection or long-press callouts */
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+canvas { display: block; }
