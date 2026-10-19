@@ -39,7 +39,7 @@ const INFO_COMPACT: [string, string][] = [
   ['OUT', 'Shows just the collage without the UI. {TAP} to come back.'],
 ];
 const INFO_GESTURES = ['TAP', 'DRAG', 'PINCH', 'TWIST'];
-const INFO_CREDIT_LINKS = { project: 'https://maybemachines.com', author: 'https://ravipopat.info' };
+const INFO_CREDIT_LINKS = { project: 'https://ravipopat.info/maybe-machines', author: 'https://ravipopat.info' };
 const BUTTON_SIZE = 58;              // px
 const BUTTON_FONT = "'VT323', monospace";
 const BUTTON_FONT_SIZE = 18;         // px
@@ -103,29 +103,53 @@ interface Layout {
   feedTop: number;        // The area the starting feed fits into (compact: fills, cropping if needed)
   feedBottom: number;
   maxFeedWidth: number;
+  insetTop: number;       // px the phone itself covers at the top / bottom (notch, gesture bar)
+  insetBottom: number;
 }
 
-const getLayout = (view: { width: number; height: number }): Layout => {
+// The visible area in CSS pixels, plus the device's safe-area insets
+interface View {
+  width: number;
+  height: number;
+  insetTop?: number;
+  insetBottom?: number;
+}
+
+const getLayout = (view: View): Layout => {
+  const insetTop = view.insetTop ?? 0;
+  const insetBottom = view.insetBottom ?? 0;
   if (view.width >= BAR_MIN_WIDTH) {
-    const feedTop = CONTROLS_MARGIN + CONTROLS_GAP;
-    const feedBottom = Math.max(feedTop + 100, view.height - (CONTROLS_MARGIN + BUTTON_SIZE + CONTROLS_GAP));
-    return { compact: false, buttonSize: BUTTON_SIZE, margin: CONTROLS_MARGIN, feedTop, feedBottom, maxFeedWidth: view.width * VIDEO_SCALE };
+    const feedTop = insetTop + CONTROLS_MARGIN + CONTROLS_GAP;
+    const feedBottom = Math.max(feedTop + 100, view.height - insetBottom - (CONTROLS_MARGIN + BUTTON_SIZE + CONTROLS_GAP));
+    return { compact: false, buttonSize: BUTTON_SIZE, margin: CONTROLS_MARGIN, feedTop, feedBottom, maxFeedWidth: view.width * VIDEO_SCALE, insetTop, insetBottom };
   }
   const gap = Math.max(COMPACT_GAP_MIN, Math.round(view.width * COMPACT_GAP_RATIO));
   const buttonSize = Math.floor((view.width - 5 * gap) / 6); // margin, CUT, gap, CLONE, gap, ERASE, gap, pill of 3, margin
-  const feedTop = 2 * gap + buttonSize;
-  const feedBottom = Math.max(feedTop + 100, view.height - feedTop);
-  return { compact: true, buttonSize, margin: gap, feedTop, feedBottom, maxFeedWidth: view.width - 2 * gap };
+  const rowBand = 2 * gap + buttonSize;
+  const feedTop = insetTop + rowBand;
+  const feedBottom = Math.max(feedTop + 100, view.height - insetBottom - rowBand);
+  return { compact: true, buttonSize, margin: gap, feedTop, feedBottom, maxFeedWidth: view.width - 2 * gap, insetTop, insetBottom };
 };
 
-const getFeedCenterY = (view: { width: number; height: number }) => {
+// Reads the device's safe-area insets (notch, home indicator) that CSS exposes as env() values
+const readSafeAreaInsets = (): { insetTop: number; insetBottom: number } => {
+  const probe = document.createElement('div');
+  probe.style.cssText = 'position:fixed;visibility:hidden;padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)';
+  document.body.appendChild(probe);
+  const style = getComputedStyle(probe);
+  const insets = { insetTop: parseFloat(style.paddingTop) || 0, insetBottom: parseFloat(style.paddingBottom) || 0 };
+  probe.remove();
+  return insets;
+};
+
+const getFeedCenterY = (view: View) => {
   const layout = getLayout(view);
   return (layout.feedTop + layout.feedBottom) / 2;
 };
 
 // Largest size for the starting feed that fits the feed area
-const fitVideo = (canvasWidth: number, canvasHeight: number, aspectRatio: number) => {
-  const layout = getLayout({ width: canvasWidth, height: canvasHeight });
+const fitVideo = (view: View, aspectRatio: number) => {
+  const layout = getLayout(view);
   const width = Math.min(layout.maxFeedWidth, (layout.feedBottom - layout.feedTop) * aspectRatio);
   return { width, height: width / aspectRatio };
 };
@@ -578,7 +602,10 @@ const App: React.FC = () => {
   const scratchCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const activePointers = useRef(new Map<number, Point>()); // Fingers currently down, for pinch
   // Canvas size in CSS pixels; the backing store is scaled by devicePixelRatio for sharp Retina output
-  const viewRef = useRef({ width: window.innerWidth, height: window.innerHeight, dpr: 1 });
+  const viewRef = useRef({ width: window.innerWidth, height: window.innerHeight, dpr: 1, insetTop: 0, insetBottom: 0 });
+  // The visible size, which the whole app is sized to (not 100vh, which on phones includes the
+  // area behind the browser's toolbars and pushes the bottom row off-screen)
+  const [viewSize, setViewSize] = useState({ width: window.innerWidth, height: window.innerHeight });
   const hasInitialized = useRef(false);
   const pointerTypeRef = useRef<string>('mouse');
   const snapPulseAt = useRef(0);
@@ -735,7 +762,7 @@ const App: React.FC = () => {
 
     // Desktop: the whole feed, fitted. Compact: the feed fills the space between the rows,
     // center-cropped to that shape (never stretched).
-    const fitted = fitVideo(view.width, view.height, video.videoWidth / video.videoHeight);
+    const fitted = fitVideo(view, video.videoWidth / video.videoHeight);
     let w = fitted.width;
     let h = fitted.height;
     let cropX = 1;
@@ -807,7 +834,7 @@ const App: React.FC = () => {
                 const { videoWidth, videoHeight } = videoRef.current;
                 const aspectRatio = videoWidth / videoHeight;
 
-                setVideoDimensions(fitVideo(viewRef.current.width, viewRef.current.height, aspectRatio));
+                setVideoDimensions(fitVideo(viewRef.current, aspectRatio));
             };
         }
     } catch (err) {
@@ -1062,14 +1089,17 @@ const App: React.FC = () => {
     const sizeCanvas = () => {
       const previous = viewRef.current;
       const dpr = window.devicePixelRatio || 1;
-      const width = window.innerWidth;
-      const height = window.innerHeight;
+      // The visual viewport is what's actually on screen between the browser's toolbars
+      const width = Math.round(window.visualViewport?.width ?? window.innerWidth);
+      const height = Math.round(window.visualViewport?.height ?? window.innerHeight);
+      const insets = readSafeAreaInsets();
       canvas.width = Math.round(width * dpr);
       canvas.height = Math.round(height * dpr);
       canvas.style.width = `${width}px`;
       canvas.style.height = `${height}px`;
-      viewRef.current = { width, height, dpr };
-      setLayout(getLayout({ width, height }));
+      viewRef.current = { width, height, dpr, ...insets };
+      setViewSize({ width, height });
+      setLayout(getLayout(viewRef.current));
       return previous;
     };
 
@@ -1096,12 +1126,17 @@ const App: React.FC = () => {
       }
       const video = videoRef.current;
       if (video?.videoWidth && video.videoHeight) {
-        setVideoDimensions(fitVideo(viewRef.current.width, viewRef.current.height, video.videoWidth / video.videoHeight));
+        setVideoDimensions(fitVideo(viewRef.current, video.videoWidth / video.videoHeight));
       }
     };
 
+    // Phones also resize the visible area when their toolbars slide in or out
     window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
+    window.visualViewport?.addEventListener('resize', handleResize);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      window.visualViewport?.removeEventListener('resize', handleResize);
+    };
   }, [setupWebcam]);
 
   // One render loop for the app's lifetime; it always calls the latest draw
@@ -1769,8 +1804,8 @@ const App: React.FC = () => {
 
   return (
     <div 
-      className="w-screen h-screen overflow-hidden relative font-sans"
-      style={{ backgroundColor: bgColor, transition: 'background-color 0.3s ease' }}
+      className="overflow-hidden relative font-sans"
+      style={{ width: viewSize.width, height: viewSize.height, backgroundColor: bgColor, transition: 'background-color 0.3s ease' }}
     >
       <canvas
         ref={canvasRef}
@@ -1795,7 +1830,7 @@ const App: React.FC = () => {
       {!isOutMode && tool === 'clone' && !cloneSource && (
         <p
           className="absolute left-1/2 -translate-x-1/2 text-gray-300 text-lg leading-none whitespace-nowrap pointer-events-none"
-          style={{ fontFamily: BUTTON_FONT, bottom: layout.compact ? 2 * layout.margin + layout.buttonSize + 6 : layout.margin + layout.buttonSize + 3, textShadow: '0 0 4px #000, 0 0 2px #000' }}
+          style={{ fontFamily: BUTTON_FONT, bottom: layout.insetBottom + (layout.compact ? 2 * layout.margin + layout.buttonSize + 6 : layout.margin + layout.buttonSize + 3), textShadow: '0 0 4px #000, 0 0 2px #000' }}
         >
           {layout.compact ? 'TAP TO PICK A SAMPLE · TAP CLONE TO RESAMPLE' : 'CLICK TO PICK A SAMPLE · ALT-CLICK TO RESAMPLE'}
         </p>
@@ -1803,11 +1838,11 @@ const App: React.FC = () => {
 
       {!isOutMode && !layout.compact && (
         <>
-          <div className="absolute" style={{ left: CONTROLS_MARGIN, bottom: CONTROLS_MARGIN, zIndex: 30 }}>
+          <div className="absolute" style={{ left: CONTROLS_MARGIN, bottom: CONTROLS_MARGIN + layout.insetBottom, zIndex: 30 }}>
             {renderInfoButton(BUTTON_SIZE)}
           </div>
 
-          <div className="absolute left-1/2 -translate-x-1/2 flex items-center" style={{ bottom: CONTROLS_MARGIN }}>
+          <div className="absolute left-1/2 -translate-x-1/2 flex items-center" style={{ bottom: CONTROLS_MARGIN + layout.insetBottom }}>
             <div className="flex items-center" style={{ gap: BAR_SPACING }}>
               {tools.map(t => renderButton(t.label, () => selectTool(t.id), `${t.id} (${t.key.toUpperCase()})`, { active: tool === t.id }))}
             </div>
@@ -1819,7 +1854,7 @@ const App: React.FC = () => {
             </div>
           </div>
 
-          <div className="absolute" style={{ right: CONTROLS_MARGIN, bottom: CONTROLS_MARGIN }}>
+          <div className="absolute" style={{ right: CONTROLS_MARGIN, bottom: CONTROLS_MARGIN + layout.insetBottom }}>
             {renderButton(['OUT'], enterOutMode, 'Out: show just the collage, filling the window (O)',
               { colors: { bg: OUT_BUTTON_COLOR, text: OUT_BUTTON_TEXT_COLOR } })}
           </div>
@@ -1832,22 +1867,22 @@ const App: React.FC = () => {
         return (
           <>
             {/* Top row: INFO and OUT in the corners, brush size and copy/paste squares centered */}
-            <div className="absolute" style={{ left: gap, top: gap, zIndex: 30 }}>
+            <div className="absolute" style={{ left: gap, top: gap + layout.insetTop, zIndex: 30 }}>
               {renderInfoButton(size)}
             </div>
-            <div className="absolute left-1/2 -translate-x-1/2 flex" style={{ top: gap, gap: SQUARE_GAP }}>
+            <div className="absolute left-1/2 -translate-x-1/2 flex" style={{ top: gap + layout.insetTop, gap: SQUARE_GAP }}>
               {renderSquareButton(signIcon(false, size), brushSmaller, 'Smaller brush', (tool !== 'clone' && tool !== 'erase') || brushRadius <= BRUSH_MIN, size)}
               {renderSquareButton(signIcon(true, size), brushLarger, 'Bigger brush', (tool !== 'clone' && tool !== 'erase') || brushRadius >= BRUSH_MAX, size)}
               {renderSquareButton(<span>COPY</span>, copyPiece, 'Copy the last piece you touched', !canCopy, size)}
               {renderSquareButton(<><span className="block">PAS</span><span className="block">TE</span></>, pastePiece, 'Paste a copy', !clipboard, size)}
             </div>
-            <div className="absolute" style={{ right: gap, top: gap }}>
+            <div className="absolute" style={{ right: gap, top: gap + layout.insetTop }}>
               {renderButton(['OUT'], enterOutMode, 'Out: show just the collage, filling the screen',
                 { colors: { bg: OUT_BUTTON_COLOR, text: OUT_BUTTON_TEXT_COLOR }, size })}
             </div>
 
             {/* Bottom row: edge to edge with equal gaps; the action pill's buttons touch */}
-            <div className="absolute flex items-center justify-between" style={{ left: gap, right: gap, bottom: gap }}>
+            <div className="absolute flex items-center justify-between" style={{ left: gap, right: gap, bottom: gap + layout.insetBottom }}>
               {tools.filter(t => t.id !== 'move').map(t => renderButton(t.label, () => selectTool(t.id), t.id, { active: tool === t.id, size }))}
               <div className="flex items-center rounded-full" style={{ backgroundColor: ACTION_TRAY_COLOR }}>
                 {renderButton(['UNDO'], undo, 'Undo', { disabled: !canUndo, size })}

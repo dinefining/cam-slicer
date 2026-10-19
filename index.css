@@ -8,4 +8,5 @@ html, body {
   user-select: none;
   -webkit-touch-callout: none;
 }
+html, body, #root { height: 100%; }
 canvas { display: block; }
