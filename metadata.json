@@ -1,0 +1,8 @@
+{
+  "name": "Cam Slicer",
+  "description": "A minimal, tactile, digital collage tool that treats a live webcam feed as a material to be cut, fragmented, and rearranged. Use your mouse to slice and manipulate your live video into a dynamic, cubist composition.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": []
+}
